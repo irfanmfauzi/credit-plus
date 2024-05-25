@@ -1,7 +1,7 @@
 package tests
 
 import (
-	"credit-plus/internal/server"
+	"credit-plus/internal/handler"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestHandler(t *testing.T) {
-	s := &server.Server{}
+	s := &handler.Server{}
 	server := httptest.NewServer(http.HandlerFunc(s.HelloWorldHandler))
 	defer server.Close()
 	resp, err := http.Get(server.URL)

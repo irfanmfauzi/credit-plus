@@ -1,13 +1,16 @@
 package main
 
 import (
-	"credit-plus/internal/server"
+	"credit-plus/internal/handler"
 	"fmt"
+	"log/slog"
 )
 
 func main() {
 
-	server := server.NewServer()
+	server := handler.NewServer()
+
+	slog.Info("Starting Credit Plus")
 
 	err := server.ListenAndServe()
 	if err != nil {

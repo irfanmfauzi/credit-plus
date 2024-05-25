@@ -1,15 +1,19 @@
-package database
+package service
 
 import (
 	"context"
-	"database/sql"
+	"credit-plus/internal/model/request"
+	"credit-plus/internal/repository"
 	"fmt"
 	"log"
+	"log/slog"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
 )
 
@@ -22,10 +26,16 @@ type Service interface {
 	// Close terminates the database connection.
 	// It returns an error if the connection cannot be closed.
 	Close() error
+
+	CreateCustomer(context.Context, request.CreateCustomerRequest) error
+
+	CreateContract(context.Context, request.CreateContactRequest) (int, error)
 }
 
 type service struct {
-	db *sql.DB
+	db              *sqlx.DB
+	customerRepo    repository.CustomerRepository
+	installmentRepo repository.InstallmentRepository
 }
 
 var (
@@ -37,25 +47,51 @@ var (
 	dbInstance *service
 )
 
-func New() Service {
+func New() *service {
 	// Reuse Connection
 	if dbInstance != nil {
 		return dbInstance
 	}
 
+	if dbname == "" {
+		dbname = "credit_plus"
+	}
+
+	if password == "" {
+		password = "root"
+	}
+
+	if username == "" {
+		username = "root"
+	}
+
+	if port == "" {
+		port = "3306"
+	}
+
+	if host == "" {
+		host = "127.0.0.1"
+	}
+
 	// Opening a driver typically will not attempt to connect to the database.
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, dbname))
+	db, err := sqlx.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, dbname))
 	if err != nil {
 		// This will not be a connection error, but a DSN parse error or
 		// another initialization error.
 		log.Fatal(err)
 	}
+
 	db.SetConnMaxLifetime(0)
 	db.SetMaxIdleConns(50)
 	db.SetMaxOpenConns(50)
 
+	customerRepo := repository.NewCustomerRepo(db)
+	installmentRepo := repository.NewInstallmentRepo(db)
+
 	dbInstance = &service{
-		db: db,
+		customerRepo:    &customerRepo,
+		installmentRepo: &installmentRepo,
+		db:              db,
 	}
 	return dbInstance
 }
@@ -117,4 +153,70 @@ func (s *service) Health() map[string]string {
 func (s *service) Close() error {
 	log.Printf("Disconnected from database: %s", dbname)
 	return s.db.Close()
+}
+
+func (s *service) CreateCustomer(ctx context.Context, req request.CreateCustomerRequest) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	err = s.customerRepo.InsertCustomer(ctx, tx, req)
+	if err != nil {
+		return err
+	}
+
+	tx.Commit()
+
+	return nil
+}
+
+func (s *service) CreateContract(ctx context.Context, req request.CreateContactRequest) (int, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	isAllowed, err := s.customerRepo.CheckLimitTransaction(ctx, tx, req.OtrPrice, req.CustomerID)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+
+	if !isAllowed {
+		return http.StatusBadGateway, fmt.Errorf("Your limit is less than price")
+	}
+
+	err = s.customerRepo.UpdateLimitTransaction(ctx, tx, req.OtrPrice, req.CustomerID)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+
+	contractId, err := s.customerRepo.InsertContract(ctx, tx, req)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+
+	installmentAmount := req.OtrPrice + (req.OtrPrice * req.Bunga / 100) + req.Fee
+
+	reqInstallments := make([]request.CreateCustomerInstallmentRequest, req.Tenor)
+
+	for i := range req.Tenor {
+		reqInstallments[i] = request.CreateCustomerInstallmentRequest{
+			ContractId:        contractId,
+			InstallmentAmount: installmentAmount / req.Tenor,
+			PaidAmount:        0,
+			DueDate:           time.Now().AddDate(0, i+1, 0),
+		}
+	}
+
+	err = s.installmentRepo.BulkInsertInstallment(ctx, tx, reqInstallments)
+	if err != nil {
+		slog.Error("CreateContract Error BulkInsertInstallment", "Error", err)
+		return http.StatusInternalServerError, err
+	}
+
+	tx.Commit()
+	return http.StatusCreated, nil
 }

@@ -1,17 +1,38 @@
 version: '3.8'
 
 services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+        - mysql_networks
+
   mysql:
     image: mysql:latest
     environment:
-      MYSQL_DATABASE: ${DB_DATABASE}
-      MYSQL_USER: ${DB_USERNAME}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: credit_plus
+      MYSQL_ROOT_HOST: "%"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     ports:
-      - "${DB_PORT}:3306"
+      - 3306:3306
     volumes:
       - mysql_volume:/var/lib/mysql
+    networks:
+        - mysql_networks
 
 volumes:
   mysql_volume:
+
+networks:
+  mysql_networks:
+    driver: bridge
