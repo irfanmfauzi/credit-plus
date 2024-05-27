@@ -29,7 +29,7 @@ func (c *customerRepo) InsertCustomer(ctx context.Context, tx TxProvider, req re
 }
 
 func (c *customerRepo) CheckLimitTransaction(ctx context.Context, tx TxProvider, otrPrice int, customerId int64) (bool, error) {
-	checkLimitQuery := "SELECT limit_transaction > ? FROM customers where id = ?"
+	checkLimitQuery := "SELECT limit_transaction > ? as check_limit FROM customers where id = ? FOR UPDATE"
 	isAllowed := 0
 
 	err := c.DB(tx).GetContext(ctx, &isAllowed, checkLimitQuery, otrPrice, customerId)
